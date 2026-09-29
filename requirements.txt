@@ -1,0 +1,8 @@
+fastmcp
+langchain
+langchain-ollama
+langchain-chroma
+langchain-community
+chromadb
+streamlit
+python-dotenv
