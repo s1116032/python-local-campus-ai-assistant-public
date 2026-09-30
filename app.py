@@ -5,11 +5,7 @@ import asyncio
 import traceback
 from fastmcp import Client
 from langchain_ollama import ChatOllama
-from langchain_core.messages import (
-    HumanMessage,
-    AIMessage,
-    SystemMessage,
-)  # ✅ 新增 SystemMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 
 # ==========================================
@@ -20,18 +16,18 @@ async def _async_read_resource(uri: str):
         return await client.read_resource(uri)
 
 
-async def _async_search_and_prompt(question: str):
+async def _async_search_and_prompt(search_query: str):
     async with Client("mcp_server.py") as client:
+        # 使用重寫後的 search_query 進行檢索
         tool_result = await client.call_tool(
-            "search_knowledge", {"query": question, "k": 3}
+            "search_knowledge", {"query": search_query, "k": 3}
         )
         context = tool_result.content[0].text
 
-        # ✅ 修正：只傳入 context，不傳 question
         prompt_result = await client.get_prompt("campus_qa", {"context": context})
         system_prompt_text = prompt_result.messages[0].content.text
 
-        return context, system_prompt_text
+        return context, system_prompt_text, search_query
 
 
 # ==========================================
@@ -80,7 +76,7 @@ except Exception as e:
 
 
 # ==========================================
-# 4. 核心邏輯：Semantic Router
+# 4. 核心邏輯：Semantic Router & Query Rewriting
 # ==========================================
 def get_intent(question: str, history_text: str) -> str:
     router_prompt = f"""你是一個校園 AI 助手的意圖路由器。
@@ -103,12 +99,32 @@ def get_intent(question: str, history_text: str) -> str:
     return intent if intent in valid_intents else "general"
 
 
+def rewrite_query(question: str, history_text: str) -> str:
+    """
+    查詢重寫：將依賴上下文的簡短問題，重寫為獨立的完整檢索 Query
+    """
+    rewrite_prompt = f"""你是一個專業的查詢重寫助手。
+請根據「對話歷史」與「當前問題」，將當前問題重寫為一個獨立、完整、包含關鍵實體的查詢語句，以便在向量資料庫中進行精準檢索。
+如果當前問題已經很完整且不依賴歷史，請保持原樣。
+**只輸出重寫後的查詢語句，絕對不要包含任何解釋、前言或標點符號。**
+
+對話歷史：
+{history_text if history_text else "無"}
+
+當前問題：{question}
+
+重寫後的查詢語句："""
+
+    response = llm.invoke([HumanMessage(content=rewrite_prompt)])
+    return response.content.strip()
+
+
 # ==========================================
 # 5. 主介面
 # ==========================================
 st.title("🎓 星光大學校園知識問答助手")
 st.markdown("""
-採用 **Agentic Workflow** 與 **標準 Chat Message 結構**，確保多輪對話的連貫性與 Token 穩定性。
+採用 **Agentic Workflow**，內建 **Query Rewriting (查詢重寫)** 機制，完美解決多輪對話中的指代消解問題，確保 RAG 檢索精準度。
 """)
 
 if "messages" not in st.session_state:
@@ -141,27 +157,31 @@ if prompt := st.chat_input("請輸入您的校園問題，例如：圖書館週�
             with st.spinner("🧠 正在分析問題意圖..."):
                 intent = get_intent(prompt, history_text)
 
-            history_rounds = len(safe_history) // 2  # 1輪 = 1問 + 1答 = 2則
+            history_rounds = len(safe_history) // 2
             total_rounds = len(st.session_state.messages) // 2
-
             st.sidebar.caption(f"🎯 當前意圖: `{intent}`")
             st.sidebar.caption(f"📜 本次參考歷史: {history_rounds} 輪")
             st.sidebar.caption(f"💬 累積對話: {total_rounds} 輪")
 
             final_answer = ""
             context = ""
+            rewritten_query = ""
 
-            # ✅ 終極修正：標準化 Message 結構 [System] + [History...] + [Current User]
-            current_user_msg = HumanMessage(content=prompt)  # 純粹的使用者提問
+            current_user_msg = HumanMessage(content=prompt)
 
             if intent == "campus_info":
-                with st.spinner("🔍 正在檢索知識庫..."):
-                    context, system_prompt_text = asyncio.run(
-                        _async_search_and_prompt(prompt)
+                # ✅ 新增：Query Rewriting
+                with st.spinner("✍️ 正在重寫查詢語句 (解決指代消解)..."):
+                    rewritten_query = rewrite_query(prompt, history_text)
+
+                with st.spinner("🔍 正在使用重寫後的語句檢索知識庫..."):
+                    # 傳入 rewritten_query 進行檢索
+                    context, system_prompt_text, searched_query = asyncio.run(
+                        _async_search_and_prompt(rewritten_query)
                     )
                     system_msg = SystemMessage(content=system_prompt_text)
 
-                    # 組合：[系統規範+Context] + [歷史對話] + [當前純粹提問]
+                    # 注意：送給 LLM 生成最終回答的，依然是「原始的使用者提問」，以維持對話自然度
                     messages_to_llm = (
                         [system_msg] + history_messages + [current_user_msg]
                     )
@@ -171,7 +191,7 @@ if prompt := st.chat_input("請輸入您的校園問題，例如：圖書館週�
             elif intent == "chitchat":
                 with st.spinner("💬 正在思考..."):
                     system_msg = SystemMessage(
-                        content="你是星光大學的友善校園助手。請簡短、友善地回覆使用者的日常問候，不要使用信件格式。"
+                        content="你是星光大學的友善校園助手。請全程使用繁體中文，以禮貌、自然的語氣簡短回覆使用者的日常問候，不要使用制式信件格式。"
                     )
                     messages_to_llm = (
                         [system_msg] + history_messages + [current_user_msg]
@@ -182,7 +202,7 @@ if prompt := st.chat_input("請輸入您的校園問題，例如：圖書館週�
             elif intent == "general":
                 with st.spinner("🌍 正在搜尋常識..."):
                     system_msg = SystemMessage(
-                        content="請憑你的常識回答使用者的問題，若不知道請直說，保持語氣自然。"
+                        content="請全程使用繁體中文，以禮貌、自然的語氣憑常識回答使用者的問題。若不知道請直說。"
                     )
                     messages_to_llm = (
                         [system_msg] + history_messages + [current_user_msg]
@@ -195,9 +215,16 @@ if prompt := st.chat_input("請輸入您的校園問題，例如：圖書館週�
 
             st.markdown(final_answer)
 
+            # ✅ 優化：在 Expander 中展示 Query Rewriting 的成果
             if intent == "campus_info" and context:
-                with st.expander("🔍 查看檢索到的原始上下文"):
-                    st.text_area("Context", context, height=200, disabled=True)
+                with st.expander("🔍 檢索詳情與上下文 (RAG Details)"):
+                    st.markdown(f"**原始提問:** `{prompt}`")
+                    if rewritten_query and rewritten_query != prompt:
+                        st.markdown(f"**重寫後的檢索 Query:** `{rewritten_query}` ✨")
+                    else:
+                        st.markdown(f"**檢索 Query (無需重寫):** `{prompt}`")
+                    st.markdown("---")
+                    st.text_area("檢索到的 Context", context, height=200, disabled=True)
 
             st.session_state.messages.append(
                 {"role": "assistant", "content": final_answer}
