@@ -33,6 +33,7 @@ def get_kb_info() -> str:
     """
     try:
         vs = get_vectorstore()
+        # 使用底線 _ 呼叫內部方法來取得數量，避免不必要的變數警告
         count = vs._collection.count()
         return json.dumps(
             {"status": "ready", "document_count": count, "location": DB_PATH},
@@ -74,21 +75,22 @@ def search_knowledge(query: str, k: int = 3) -> str:
 # 3. MCP PROMPT (提示詞)
 # ==========================================
 @mcp.prompt()
-def campus_qa(question: str, context: str) -> str:
+def campus_qa(context: str) -> str:
     """
-    校園知識問答的提示詞模板 (供 Host 端組合後傳送給 LLM)
+    校園知識問答的 System Prompt 模板
     """
-    return f"""你是一位友善且專業的星光大學校園助手。
+    return f"""你是星光大學的專業校園助手。
 請嚴格根據提供的「上下文資訊」來回答使用者的問題。
-如果上下文中沒有相關資訊，請直接回答「抱歉，根據目前的校園知識庫，我無法回答這個問題。」，絕對不要編造答案。
 
-上下文資訊：
+【回答規範】
+1. 請全程使用**繁體中文**進行回答。
+2. 語氣必須**自然、禮貌、友善**，像人類對話一樣，**絕對不要**使用「感謝來信」、「敬上」等制式信件格式。
+3. 答案要簡潔明瞭，直接切中要害。
+4. 如果上下文中**沒有**相關資訊，請禮貌地回答「抱歉，目前的校園知識庫中沒有相關紀錄。」，絕對不要編造答案。
+
+以下是檢索到的上下文資訊，請僅基於此資訊回答：
 {context}
-
-使用者問題：
-{question}
-
-請以繁體中文簡潔、有禮貌地回答："""
+"""
 
 
 if __name__ == "__main__":
