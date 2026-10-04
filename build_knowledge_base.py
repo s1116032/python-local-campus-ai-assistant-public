@@ -1,10 +1,14 @@
 import os
 import shutil
+
 import chromadb
-from langchain_community.document_loaders import TextLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_ollama import OllamaEmbeddings
+from dotenv import load_dotenv
 from langchain_chroma import Chroma
+from langchain_community.document_loaders import TextLoader
+from langchain_ollama import OllamaEmbeddings
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+load_dotenv()
 
 
 def build_db():
@@ -21,7 +25,9 @@ def build_db():
     chunks = text_splitter.split_documents(docs)
 
     print("正在載入本地嵌入模型 (nomic-embed-text)...")
-    embeddings = OllamaEmbeddings(model="nomic-embed-text")
+    embeddings = OllamaEmbeddings(
+        model=os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
+    )
 
     print("正在建立向量並存入 ChromaDB...")
     client = chromadb.PersistentClient(path=db_path)
